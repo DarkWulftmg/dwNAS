@@ -1,0 +1,581 @@
+#!/bin/sh
+## Library information
+# libName dwNASlib
+# libVersion 0.1
+# libInfo This library contains funcion call related to dwNAS-project
+# libDate 1. August 2015
+# libCreator Thor Grotle
+# libCreatorContact thor@grotle.dk
+# libCreatorWeb www.itso.dk
+
+dwNASDir=/usr/local/etc/dwNAS
+echo "dwNASlib loaded"
+
+
+# By default, jails are started automatically when the host computer starts. Autostarting can be disabled with config:
+# This takes effect the next time the host computer is started. A jail that is already running will not be stopped.
+## ezjail-admin config -r norun seldomjail
+
+# Enabling autostart is very similar:
+## ezjail-admin config -r run oftenjail
+
+
+
+
+
+pressENTER() {  read -p "Press [Enter] key to continue..." readEnterKey
+}
+
+zfsSnaptoggle(){
+# This toggle on/off zfs snapshotting on specific dataset var= $zfsTglSnap
+zfs get com.sun:auto-snapshot $zfsTglSnap | grep on && zfsDoSnap="on" || zfsDoSnap="off"
+if [ "$zfsDoSnap" == "on" ]
+  then
+    zfs set com.sun:auto-snapshot="off" $zfsTglSnap
+    zfs get com.sun:auto-snapshot $zfsTglSnap
+    echo "Done"
+    sleep 3
+    exit 0
+  else
+    zfs set com.sun:auto-snapshot="on" $zfsTglSnap
+    zfs get com.sun:auto-snapshot $zfsTglSnap
+    echo "Done"
+    sleep 3
+  exit 0
+fi
+}
+
+
+readModules(){
+#grep -m 1 "modName" $file | awk ''
+# Read file and extract Module Info
+# input: $file  output:modName, modVersion, modInfo, modCreator, modCreatorContact
+modFile=$file
+modName=`cat $file | awk '/modName/{print $3}'`
+modVersion=`cat $file | awk '/modVersion/{print $3}'`
+modInfo=`grep modInfo $file| sed 's/# modInfo//g'`
+modDate=`grep modDate $file| sed 's/# modDate//g'`
+modCreator=`grep -m 1 modCreator $file|sed 's/# modCreator //g'`
+modCreatorContact=`grep modCreatorContact $file| sed 's/# modCreatorContact//g'`
+echo
+echo "Module: $modName Version: $modVersion"
+echo "-------------------------------------"
+echo Module Info: $modInfo
+echo "creator of mod: $modCreator"
+echo Filename $file
+}
+
+
+
+readModFiles(){
+# Looking for all files in module dir. Loop until no more files.
+
+while true
+  do
+  for file in `ls /usr/local/etc/dwnas/mod/dwNASmod*`
+  do
+  [ -f $file ]
+  # hand over to readModules for processing
+  readModules
+done
+  sleep 5
+  break
+done
+}
+
+checkrc(){
+  ## Checking if service is present on /etc/rc.conf and if service is enabled
+  # input var is = $rccheck  output $rcpresent, $rcenabled
+
+  # Check service in rc.conf: $rccheck
+
+  echo "->checking for $rccheck"
+  cat /etc/rc.conf | grep $rccheck 2>null >null && rcpresent="YES" || rcpresent="NO"
+  echo "$rccheck exist in rc.conf=$rcpresent"
+    if [ "$rcpresent" == "YES" ]
+      then
+      # Checking if enabled at boot: $rcenabled
+      grep $rccheck /etc/rc.conf | grep -E '"YES"|"yes"|YES|yes' && rcenabled="YES" || rcenabled="NO"
+      break
+    else
+      rcenabled="NO"
+      break
+    fi
+}
+
+writerc(){
+  echo "running writerc with $rccheck and status $rcpresent"
+    pressENTER
+  if [ "$rcpresent" == "NO" ]
+    then
+      echo $rccheck'="YES"' >> /etc/rc.conf
+    else
+      echo "$rccheck allready exist in /etc/rc.conf, doing nothing"
+      break
+  fi
+}
+
+
+checkLoader(){
+  ## Checking if service is present on /etc/rc.conf and if service is enabled
+  # input var is = $rccheck  output $rcpresent, $rcenabled
+
+  # Check service in rc.conf: $rccheck
+
+  echo "->checking for $loadercheck"
+  cat /boot/loader.rc | grep $loadercheck 2>null >null && loaderpresent="YES" || loaderpresent="NO"
+  echo "$loadercheck exist in loader.rc=$loaderpresent"
+    if [ "$loaderpresent" == "YES" ]
+      then
+      # Checking if enabled at boot: $loaderenabled
+      grep $loadercheck /boot/loader.rc | grep -E '"YES"|"yes"|YES|yes' && loaderenabled="YES" || loaderenabled="NO"
+      break
+    else
+      loaderenabled="NO"
+      break
+    fi
+}
+
+writeLoader(){
+  echo "running write with $loadercheck and status $loaderpresent"
+    pressENTER
+  if [ "$loaderpresent" == "NO" ]
+    then
+      echo $loadercheck'="YES"' >> /boot/loader.rc
+    else
+      echo "$loadercheck allready exist in /boot/loader.rc
+      x, doing nothing"
+      break
+  fi
+}
+
+createJail(){
+  read -p "What is the name of the new jail?: " JAILNAME
+  read -p "What IPv4 for the new jail?: " jailip
+    jailcheck="$JAILNAME"
+    checkJail
+    pressENTER
+    if [ "$jailpresent" == "TRUE" ]
+      then echo "$JAILNAME allready exist, aborting."
+      pressENTER
+       break
+    fi
+
+    if [ "jailip" == "TRUE" ]
+      then echo "$jailip allready exist, aborting." ; pressENTER; break
+    fi
+    ezjail-admin create $JAILNAME "em0|$jailip/24"
+}
+
+jailAwake(){
+  # Checking if jail is running.
+  # input $jailcheck - Output: $jailawake-TRUE/FALSE
+  ezjail-admin list | grep $jailcheck | awk -F" " '{ print $1 }' | grep ZR 2>null >null && jailawake="TRUE" || jailawake="FALSE"
+  echo "Jail $jailcheck is running = $jailawake"
+  }
+
+startstopJail(){
+  # Depending on, if jail is awake, user is prompted to either start or stop jail
+  # input: $jailawake $JAILNAME
+  if [ "$jailawake" == "FALSE" ]
+    then
+      read -p "Start Jail $JAILNAME: [YN] ? " choice2
+      case $choice2 in
+      [Yy]) ezjail-admin start $JAILNAME  ;;
+      *) echo "doing nothing." ;;
+      esac
+  fi
+
+  if [ "$jailawake" == "TRUE" ]
+    then
+      read -p "Stop Jail $JAILNAME: [YN] ? " choice2
+      case $choice2 in
+      [Yy]) ezjail-admin stop $JAILNAME  ;;
+      *) echo "doing nothing." ;;
+      esac
+  fi
+}
+
+checkJail(){
+## Checking if jailname/ip/dataset is ready available for use
+# input var is = $jailcheck $JAILSROOT $jailip  - output $jailpresent, $jailippresent $jailfolderpresent
+
+echo ""
+echo "This starts checking if jail is present"
+echo "---------------------------------------"
+# checking if jailname allready exists, output: $jailpresent
+ezjail-admin list | grep $jailcheck 2>null >null && jailpresent="TRUE" || jailpresent="FALSE"
+#echo "Jail exists: $jailpresent"
+
+# checking if ip is allready assigned to other jail, output: $jailippresent
+ezjail-admin list | grep $jailip 2>null >null && jailippresent="TRUE" || jailippresent="FALSE"
+# checking if jail folder/dataset allready exists, output: $jailfolderpresent
+if [ -d $JAILSROOT/$jailcheck ]
+  then
+    jailfolderpresent="TRUE"
+    echo "Folder for $jailcheck exists: $jailfolderpresent"
+    echo ""
+      else
+    jailfolderpresent="FALSE"
+    echo "Folder for $jailcheck exists: $jailfolderpresent"
+    echo ""
+
+    fi
+}
+
+
+deleteJail(){
+
+## this if applied deletes a specific jail, jail dataset, and
+# input $JAILSROOT, $JAILSDATASET $JAILNAME
+while :
+do
+
+read -p "Are you sure you want to delete Jail $JAILNAME [YN]" choice
+	case $choice in
+		[Yy])
+			echo "Ok, deleting Jail $JAILNAME, you have 5 seconds to abort"
+			echo ""
+			sleep 5
+			ezjail-admin delete $JAILNAME >null 2>null && echo "Jail: $JAILNAME deleted" || echo "Unable to delete Jail: $JAILNAME"
+        while :
+				do
+        read -p "Do you want to delete Dataset $JAILSDATASET/$JAILNAME [YN]" choice2
+        case $choice2 in
+          [Yy])
+            	zfs destroy $JAILSDATASET/$JAILNAME >null 2>null && echo "Dataset: $JAILSDATASET/$JAILNAME deleted" || echo "Unable to delete dataset: $JAILSDATASET/$JAILNAME"
+			        rm -rf $JAILSROOT/$JAILNAME >null 2>null
+              break
+							;;
+					[Nn])
+              echo "Keeping Dataset $JAILSDATASET/$JAILNAME"
+              break
+							;;
+					*)
+						echo "Error: Invalid option..."
+						pressENTER
+          	;;
+				esac
+			done
+			break
+			;;
+
+		[NnQqXx])
+			echo "ok doing nothing"
+			break
+			;;
+
+		*)
+			echo "Error: Invalid option..."
+      pressENTER
+			;;
+	esac
+done
+echo""
+echo "--------------------------------"
+echo "List of Jails"
+ezjail-admin list
+echo ""
+echo "List of dataset in $JAILSDATASET"
+zfs list | grep $JAILSDATASET
+echo "--------------------------------"
+pressENTER
+}
+
+
+checkDataset(){
+## Checking if dataset is present
+# input var is = $chkdataset  - output: $datasetstatus
+
+  echo "Checking if dataset exist"
+  zfs list $chkdataset 2>null >null && datasetstatus="true" || datasetstatus="false"
+echo "$chkdataset exist: $datasetstatus"
+}
+
+
+createDataset(){
+  ## create dataset
+  # input var is = $chkdataset, $datasetstatus
+
+if [ "$datasetstatus" == "false" ]
+  then
+    echo "creating dataset"
+    zfs create $chkdataset
+    break
+  else
+    echo "doing nothing with dataset"
+    break
+fi
+}
+
+linknullfs(){
+      zfs list -r $DATAPOOL| more
+      echo ""
+      read -p "Where is the dataset you want to link? " chkdataset
+      datasetname=`echo $chkdataset | awk -F'/' '{print $NF}'`
+      echo "$datasetname"
+      checkDataset
+      echo $datasetstatus
+      if [ "$datasetstatus" == "true" ]
+        then
+        echo "Creating mountpoint in fstab"
+        checkDataset
+        checkJailfstab
+        createJailfstab
+        pressENTER
+      else
+        echo "no dataset with name $chkdataset"
+        pressENTER
+        createDataset
+        checkDataset
+        pressENTER
+        checkJailfstab
+        createJailfstab
+      fi
+    echo ""
+    echo "mountpoints in /etc/fstab.$JAILNAME"
+    echo "------------------------------------"
+    cat /etc/fstab.$JAILNAME
+    echo ""
+}
+
+
+askNullfs(){
+while :
+do
+  read -p "Do you want to add one or more nullfs links [YN]" choicelink
+  case $choicelink in
+  [Yy])
+    linknullfs
+    pressENTER
+    ;;
+
+  [NnQqXx])
+    echo "ok exiting"
+    exit 0
+    ;;
+
+  *)
+    echo "Error: Invalid option..."
+    pressENTER
+    ;;
+  esac
+done
+
+}
+askrorw(){
+  while :
+  do
+    echo ""
+    read -p "Do you want read/write or read/only [rw/ro]" choice
+    case $choice in
+    rw)
+      writestatus="rw"
+      break
+      ;;
+
+    [ro])
+      writestatus="ro"
+      break
+      ;;
+
+    *)
+      echo "Error: Invalid option..."
+      pressENTER
+      ;;
+    esac
+  done
+}
+
+selectJail(){
+# Scanning for jails
+listJails=`ezjail-admin list | grep Jails | awk -F'Jails\/' '{print $NF}'`
+
+# Assigning jail to variable
+choice="0"
+for jailname in $listJails
+do
+choice=$((choice + 1))
+if [ "$choice" == "1" ]
+  then  jname01="$jailname"
+elif [ "$choice" == "2" ]
+  then  jname02="$jailname"
+elif [ "$choice" == "3" ]
+  then  jname03="$jailname"
+elif [ "$choice" == "4" ]
+  then  jname04="$jailname"
+elif [ "$choice" == "5" ]
+  then  jname05="$jailname"
+elif [ "$choice" == "6" ]
+  then  jname06="$jailname"
+elif [ "$choice" == "7" ]
+  then  jname07="$jailname"
+elif [ "$choice" == "8" ]
+  then  jname08="$jailname"
+elif [ "$choice" == "9" ]
+  then  jname09="$jailname"
+elif [ "$choice" == "10" ]
+  then  jname10="$jailname"
+elif [ "$choice" == "11" ]
+  then  jname11="$jailname"
+elif [ "$choice" == "12" ]
+  then  jname12="$jailname"
+elif [ "$choice" == "13" ]
+  then  jname13="$jailname"
+elif [ "$choice" == "14" ]
+  then  jname14="$jailname"
+elif [ "$choice" == "15" ]
+  then  jname15="$jailname"
+elif [ "$choice" == "16" ]
+  then  jname16="$jailname"
+elif [ "$choice" == "17" ]
+  then  jname17="$jailname"
+elif [ "$choice" == "18" ]
+  then  jname18="$jailname"
+elif [ "$choice" == "19" ]
+  then  jname19="$jailname"
+elif [ "$choice" == "20" ]
+  then  jname20="$jailname"
+fi
+done
+
+
+# Showing Jail in menu numbered list
+while :
+do
+echo -------------------------------------------------------------------------------
+echo "	 Select Jail"
+echo -------------------------------------------------------------------------------
+if [ ! -z "$jname01" ]
+  then echo "1. $jname01"; fi
+if [ ! -z "$jname02" ]
+  then echo "2. $jname02"; fi
+if [ ! -z "$jname03" ]
+  then echo "3. $jname03"; fi
+if [ ! -z "$jname04" ]
+  then echo "4. $jname04"; fi
+if [ ! -z "$jname05" ]
+  then echo "5. $jname05"; fi
+if [ ! -z "$jname06" ]
+  then echo "6. $jname06"; fi
+if [ ! -z "$jname07" ]
+  then echo "7. $jname07"; fi
+if [ ! -z "$jname08" ]
+  then echo "8. $jname08"; fi
+if [ ! -z "$jname09" ]
+  then echo "9. $jname09"; fi
+if [ ! -z "$jname10" ]
+  then echo "10. $jname10"; fi
+if [ ! -z "$jname11" ]
+  then echo "11. $jname11"; fi
+if [ ! -z "$jname12" ]
+  then echo "12. $jname12"; fi
+if [ ! -z "$jname13" ]
+  then echo "13. $jname13"; fi
+if [ ! -z "$jname14" ]
+  then echo "14. $jname14"; fi
+if [ ! -z "$jname15" ]
+  then echo "15. $jname15"; fi
+if [ ! -z "$jname16" ]
+  then echo "16. $jname16"; fi
+if [ ! -z "$jname17" ]
+  then echo "17. $jname17"; fi
+if [ ! -z "$jname18" ]
+  then echo "18. $jname18"; fi
+if [ ! -z "$jname19" ]
+  then echo "19. $jname19"; fi
+if [ ! -z "$jname20" ]
+  then echo "20. $jname20"; fi
+
+echo -------------------------------------------------------------------------------
+echo "B. Back in menu"
+echo "Q. Exit Menu"
+
+
+# checking user input to assign choice
+read -p "Enter your choice [ 1 - $choice ] " choice2
+case $choice2 in
+  1) JAILNAME=$jname01; break ;;
+  2) JAILNAME=$jname02; break ;;
+  3) JAILNAME=$jname03; break ;;
+  4) JAILNAME=$jname04; break ;;
+  5) JAILNAME=$jname05; break ;;
+  6) JAILNAME=$jname06; break ;;
+  7) JAILNAME=$jname07; break ;;
+  8) JAILNAME=$jname08; break ;;
+  9) JAILNAME=$jname09; break ;;
+  10) JAILNAME=$jname10; break ;;
+  11) JAILNAME=$jname11; break ;;
+  12) JAILNAME=$jname12; break ;;
+  13) JAILNAME=$jname13; break ;;
+  14) JAILNAME=$jname14; break ;;
+  15) JAILNAME=$jname15; break ;;
+  16) JAILNAME=$jname16; break ;;
+  17) JAILNAME=$jname17; break ;;
+  18) JAILNAME=$jname18; break ;;
+  19) JAILNAME=$jname19; break ;;
+  20) JAILNAME=$jname20; break ;;
+  [Bb]) break ;;
+  [QqXx]) exit 0 ;;
+  *) echo "Error: Invalid option..." ; pressENTER ;;
+    esac
+done
+  #echo $JAILNAME selected
+}
+
+checkJailfstab(){
+  # input var is = $chkdataset $JAILNAME output $datesetname, $fstabpresent
+
+  echo "->checking for $chkdataset in /etc/fstab.$JAILNAME"
+  cat /etc/fstab.$JAILNAME | grep $chkdataset 2>null >null && fstabpresent="YES" || fstabpresent="NO"
+  echo "$datasetname exist in /etc/fstab.$JAILNAME"
+}
+
+createJailfstab(){
+    if [ "$fstabpresent" == "YES" ]
+      then
+        echo "->allready existing link $chkdataset in /etc/fstab.$JAILNAME"
+      else
+        echo "/mnt/$chkdataset $JAILSROOT/$datasetname nullfs ro 0 0" >> /etc/fstab.$JAILNAME
+    fi
+}
+listDisk(){
+disklist2=`sysctl -a | grep kern.geom.disk | sed "s/kern.geom.disk.//" | sed "s/.led://"|sed 's/ //'`
+echo
+echo All disks:
+echo "------------------------"
+echo $disklist2
+echo ""
+echo "Disk SN:"
+echo "------------------------"
+
+# Getting serial number from ada
+for disk in $disklist2
+do
+    sndisk=`camcontrol identify $disk 2>null | grep serial | awk -F' ' '{print $NF}'`
+    echo Disk: $disk  SN: $sndisk
+done
+
+echo ""
+echo "Pools ready to import"
+echo "------------------------"
+zpoolready=`zpool import | grep pool: |sed 's/pool: //'|sed 's/   //'`
+if [[ -z "$poolready" ]] 2>null
+  then
+    zpoolready="None"
+fi
+echo $zpoolready
+}
+
+
+shutDown(){
+read -p "Getting ready to shutdown DarkNAS, are you really doing this [y]" SHUTDOWN
+if [ "$SHUTDOWN"="y" ]
+then
+pressENTER
+halt -p
+else
+echo "pheeew, going back to menu"
+pressENTER
+fi
+}
